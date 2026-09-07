@@ -18,7 +18,7 @@ public class MainActivity extends AppCompatActivity {
     private ValueCallback<Uri[]> uploadMessage;
     private final static int FILE_CHOOSER_RESULT_CODE = 1;
 
-    @SuppressLint({"SetJavaScriptEnabled", "QueryPermissionsNeeded"})
+    @SuppressLint({"SetJavaScriptEnabled", "QueryPermissionsNeeded", "JavascriptInterface"})
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -38,11 +38,51 @@ public class MainActivity extends AppCompatActivity {
         webSettings.setAllowUniversalAccessFromFileURLs(true);
         webSettings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
         webSettings.setMediaPlaybackRequiresUserGesture(false);
+
+        // Kreiranje AndroidBridge mosta za promenu User-Agent-a iz JS-a
+        webView.addJavascriptInterface(new Object() {
+            @android.webkit.JavascriptInterface
+            public void setUserAgent(String ua) {
+                runOnUiThread(() -> {
+                    webView.getSettings().setUserAgentString(ua);
+                });
+            }
+        }, "AndroidBridge");
+
         webView.setWebViewClient(new WebViewClient() {
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, String url) {
                 view.loadUrl(url);
                 return true;
+            }
+
+            @Override
+            public void onPageFinished(WebView view, String url) {
+                super.onPageFinished(view, url);
+                
+                // Automatsko ubacivanje fetch interceptora koji hvata #ua= parametar
+                String injectionScript = 
+                    "if (!window.__fetchPatched) {" +
+                    "   window.__fetchPatched = true;" +
+                    "   const originalFetch = window.fetch;" +
+                    "   window.fetch = async function(resource, options = {}) {" +
+                    "       let urlString = typeof resource === 'string' ? resource : (resource && resource.url ? resource.url : '');" +
+                    "       if (urlString && urlString.includes('#ua=')) {" +
+                    "           try {" +
+                    "               const parts = urlString.split('#ua=');" +
+                    "               const cleanUrl = parts[0];" +
+                    "               const customUA = decodeURIComponent(parts[1].split('&')[0]);" +
+                    "               if (window.AndroidBridge && typeof window.AndroidBridge.setUserAgent === 'function') {" +
+                    "                   window.AndroidBridge.setUserAgent(customUA);" +
+                    "               }" +
+                    "               resource = cleanUrl;" +
+                    "           } catch (e) {}" +
+                    "       }" +
+                    "       return originalFetch(resource, options);" +
+                    "   };" +
+                    "}";
+                
+                view.evaluateJavascript(injectionScript, null);
             }
         });
 
