@@ -39,7 +39,11 @@ public class MainActivity extends AppCompatActivity {
         webSettings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
         webSettings.setMediaPlaybackRequiresUserGesture(false);
 
-        // Kreiranje AndroidBridge mosta za promenu User-Agent-a iz JS-a
+        // ZAKUCAN DESKTOP USER-AGENT OD STARTA
+        String defaultDesktopUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+        webSettings.setUserAgentString(defaultDesktopUA);
+
+        // AndroidBridge ostaje aktivan ukoliko zatreba naknadna izmena
         webView.addJavascriptInterface(new Object() {
             @android.webkit.JavascriptInterface
             public void setUserAgent(String ua) {
@@ -60,35 +64,33 @@ public class MainActivity extends AppCompatActivity {
             public void onPageFinished(WebView view, String url) {
                 super.onPageFinished(view, url);
                 
-                // Automatsko ubacivanje fetch interceptora koji hvata #ua= parametar
+                // Zadržavamo fetch interceptor radi kompatibilnosti sa #ua= ukoliko ga pošalješ
                 String injectionScript = 
-    "if (!window.__fetchPatched) {" +
-    "    window.__fetchPatched = true;" +
-    "    const originalFetch = window.fetch;" +
-    "    window.fetch = async function(resource, options = {}) {" +
-    "        let urlString = typeof resource === 'string' ? resource : (resource && resource.url ? resource.url : '');" +
-    "        if (urlString && urlString.includes('#ua=')) {" +
-    "            try {" +
-    "                const parts = urlString.split('#ua=');" +
-    "                const cleanUrl = parts[0];" +
-    "                const customUA = decodeURIComponent(parts[1].split('&')[0]);" +
-    "                if (window.AndroidBridge && typeof window.AndroidBridge.setUserAgent === 'function') {" +
-    "                    window.AndroidBridge.setUserAgent(customUA);" +
-    "                }" +
-    "                resource = cleanUrl;" +
-    "                // KLJUČNO: Pauza dozvoljava WebView-u da primeni novi UA pre nego što fetch pošalje paket" +
-    "                await new Promise(resolve => setTimeout(resolve, 500));" +
-    "            } catch (e) {}" +
-    "        }" +
-    "        return originalFetch(resource, options);" +
-    "    };" +
-    "}";
+                    "if (!window.__fetchPatched) {" +
+                    "    window.__fetchPatched = true;" +
+                    "    const originalFetch = window.fetch;" +
+                    "    window.fetch = async function(resource, options = {}) {" +
+                    "        let urlString = typeof resource === 'string' ? resource : (resource && resource.url ? resource.url : '');" +
+                    "        if (urlString && urlString.includes('#ua=')) {" +
+                    "            try {" +
+                    "                const parts = urlString.split('#ua=');" +
+                    "                const cleanUrl = parts[0];" +
+                    "                const customUA = decodeURIComponent(parts[1].split('&')[0]);" +
+                    "                if (window.AndroidBridge && typeof window.AndroidBridge.setUserAgent === 'function') {" +
+                    "                    window.AndroidBridge.setUserAgent(customUA);" +
+                    "                }" +
+                    "                resource = cleanUrl;" +
+                    "                await new Promise(resolve => setTimeout(resolve, 200));" +
+                    "            } catch (e) {}" +
+                    "        }" +
+                    "        return originalFetch(resource, options);" +
+                    "    };" +
+                    "}";
                 
                 view.evaluateJavascript(injectionScript, null);
             }
         });
 
-        // KLJUČNO ZA <input type="file">: WebChromeClient preuzima zahteve za fajlove
         webView.setWebChromeClient(new WebChromeClient() {
             @Override
             public boolean onShowFileChooser(WebView webView, ValueCallback<Uri[]> filePathCallback, FileChooserParams fileChooserParams) {
@@ -112,7 +114,6 @@ public class MainActivity extends AppCompatActivity {
         webView.loadUrl("file:///android_asset/index.html");
     }
 
-    // Prihvat izabranog fajla iz sistema i vraćanje nazad u WebView
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent intent) {
         super.onActivityResult(requestCode, resultCode, intent);
