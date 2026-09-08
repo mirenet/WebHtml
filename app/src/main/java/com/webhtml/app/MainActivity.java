@@ -25,10 +25,7 @@ public class MainActivity extends AppCompatActivity {
     private ValueCallback<Uri[]> uploadMessage;
     private final static int FILE_CHOOSER_RESULT_CODE = 1;
 
-    // Dinamički User-Agent koji može da se menja u letu
-    private String currentDesktopUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
-
-    @SuppressLint({"SetJavaScriptEnabled", "QueryPermissionsNeeded", "JavascriptInterface"})
+    @SuppressLint({"SetJavaScriptEnabled", "QueryPermissionsNeeded"})
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -47,18 +44,6 @@ public class MainActivity extends AppCompatActivity {
         webSettings.setAllowUniversalAccessFromFileURLs(true);
         webSettings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
         webSettings.setMediaPlaybackRequiresUserGesture(false);
-        webSettings.setUserAgentString(currentDesktopUA);
-
-        // AndroidBridge za promenu UA u letu iz JavaScript-a
-        webView.addJavascriptInterface(new Object() {
-            @android.webkit.JavascriptInterface
-            public void setUserAgent(String ua) {
-                currentDesktopUA = ua;
-                runOnUiThread(() -> {
-                    webView.getSettings().setUserAgentString(ua);
-                });
-            }
-        }, "AndroidBridge");
 
         webView.setWebViewClient(new WebViewClient() {
             @Override
@@ -71,45 +56,79 @@ public class MainActivity extends AppCompatActivity {
             public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
                 String urlStr = request.getUrl().toString();
                 
-                // Ako URL sadrži UA parametar (bilo kroz hash ili query), izvlačimo ga u hodu
-                String targetUA = currentDesktopUA;
-                String cleanUrlStr = urlStr;
-
-                if (urlStr.contains("#ua=")) {
-                    try {
-                        String[] parts = urlStr.split("#ua=");
-                        cleanUrlStr = parts[0];
-                        targetUA = URLDecoder.decode(parts[1].split("&")[0], "UTF-8");
-                        // Automatski ažuriramo globalni UA
-                        currentDesktopUA = targetUA;
-                    } catch (Exception ignored) {}
+                // Ako nema hashtag-a (#), propuštamo standardni WebView zahtev (rešava CORS)
+                if (!urlStr.contains("#")) {
+                    return super.shouldInterceptRequest(view, request);
                 }
 
-                if (cleanUrlStr.contains("youtube.com/results")) {
-                    try {
-                        URL url = new URL(cleanUrlStr);
-                        HttpURLConnection connection = (HttpURLConnection) url.openConnection();
-                        connection.setRequestMethod("GET");
-                        connection.setRequestProperty("User-Agent", targetUA);
+                try {
+                    // Delimo URL na čisti deo i parametre posle #
+                    String[] mainParts = urlStr.split("#", 2);
+                    String cleanUrlStr = mainParts[0];
+                    String fragment = mainParts[1];
+
+                    boolean isHtmlMode = fragment.contains("html");
+                    boolean isApiMode = fragment.contains("api");
+
+                    // Definisanje podrazumevanog UA prema modu
+                    String defaultUa;
+                    if (isHtmlMode) {
+                        defaultUa = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+                    } else if (isApiMode) {
+                        defaultUa = "LFM_MusicApp/1.0 (contact: moj@gmail.com)";
+                    } else {
+                        // Ako nema ni #html ni #api, uzimamo sistemski WebView UA
+                        defaultUa = webView.getSettings().getUserAgentString();
+                    }
+
+                    // Provera da li postoji opcionalni &ua= ili ua= parametar u fragmentu
+                    String finalUa = defaultUa;
+                    if (fragment.contains("ua=")) {
+                        try {
+                            String[] uaParts = fragment.split("ua=");
+                            if (uaParts.length > 1) {
+                                String customUa = URLDecoder.decode(uaParts[1].split("&")[0], "UTF-8");
+                                if (!customUa.isEmpty() && customUa.length() < 300) {
+                                    finalUa = customUa;
+                                }
+                            }
+                        } catch (Exception ignored) {}
+                    }
+
+                    // Izvršavanje mrežnog zahteva preko HttpURLConnection u Javi
+                    URL url = new URL(cleanUrlStr);
+                    HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+                    connection.setRequestMethod("GET");
+                    connection.setRequestProperty("User-Agent", finalUa);
+                    
+                    // Fiksni headeri za HTML mod
+                    if (isHtmlMode) {
                         connection.setRequestProperty("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
                         connection.setRequestProperty("Accept-Language", "en-US,en;q=0.9");
-                        connection.setConnectTimeout(10000);
-                        connection.setReadTimeout(10000);
+                    }
+                    
+                    connection.setConnectTimeout(10000);
+                    connection.setReadTimeout(10000);
 
-                        InputStream inputStream = connection.getInputStream();
-                        String mimeType = connection.getContentType();
-                        if (mimeType == null) mimeType = "text/html; charset=UTF-8";
-                        
-                        String encoding = "UTF-8";
-                        if (mimeType.contains("charset=")) {
-                            try {
-                                encoding = mimeType.split("charset=")[1].split(";")[0].trim();
-                            } catch (Exception ignored) {}
-                        }
+                    InputStream inputStream = connection.getInputStream();
+                    String mimeType = connection.getContentType();
+                    if (mimeType == null) {
+                        mimeType = isHtmlMode ? "text/html; charset=UTF-8" : "application/json; charset=UTF-8";
+                    }
+                    
+                    String encoding = "UTF-8";
+                    if (mimeType.contains("charset=")) {
+                        try {
+                            encoding = mimeType.split("charset=")[1].split(";")[0].trim();
+                        } catch (Exception ignored) {}
+                    }
 
-                        return new WebResourceResponse(mimeType.split(";")[0].trim(), encoding, inputStream);
-                    } catch (Exception e) {}
+                    return new WebResourceResponse(mimeType.split(";")[0].trim(), encoding, inputStream);
+
+                } catch (Exception e) {
+                    // Ako bilo šta pukne, vraća se null da WebView odradi fallback
                 }
+                
                 return super.shouldInterceptRequest(view, request);
             }
         });
