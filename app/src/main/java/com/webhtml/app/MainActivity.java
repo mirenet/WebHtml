@@ -7,16 +7,26 @@ import android.net.Uri;
 import android.os.Bundle;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
+import android.webkit.WebResourceRequest;
+import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import androidx.appcompat.app.AppCompatActivity;
+
+import java.io.InputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.net.URLDecoder;
 
 public class MainActivity extends AppCompatActivity {
 
     private WebView webView;
     private ValueCallback<Uri[]> uploadMessage;
     private final static int FILE_CHOOSER_RESULT_CODE = 1;
+
+    // Dinamički User-Agent koji može da se menja u letu
+    private String currentDesktopUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
     @SuppressLint({"SetJavaScriptEnabled", "QueryPermissionsNeeded", "JavascriptInterface"})
     @Override
@@ -33,20 +43,17 @@ public class MainActivity extends AppCompatActivity {
         webSettings.setDatabaseEnabled(true);
         webSettings.setAllowFileAccess(true);
         webSettings.setAllowContentAccess(true);
-
         webSettings.setAllowFileAccessFromFileURLs(true);
         webSettings.setAllowUniversalAccessFromFileURLs(true);
         webSettings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
         webSettings.setMediaPlaybackRequiresUserGesture(false);
+        webSettings.setUserAgentString(currentDesktopUA);
 
-        // ZAKUCAN DESKTOP USER-AGENT OD STARTA
-        String defaultDesktopUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
-        webSettings.setUserAgentString(defaultDesktopUA);
-
-        // AndroidBridge ostaje aktivan ukoliko zatreba naknadna izmena
+        // AndroidBridge za promenu UA u letu iz JavaScript-a
         webView.addJavascriptInterface(new Object() {
             @android.webkit.JavascriptInterface
             public void setUserAgent(String ua) {
+                currentDesktopUA = ua;
                 runOnUiThread(() -> {
                     webView.getSettings().setUserAgentString(ua);
                 });
@@ -61,33 +68,49 @@ public class MainActivity extends AppCompatActivity {
             }
 
             @Override
-            public void onPageFinished(WebView view, String url) {
-                super.onPageFinished(view, url);
+            public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
+                String urlStr = request.getUrl().toString();
                 
-                // Zadržavamo fetch interceptor radi kompatibilnosti sa #ua= ukoliko ga pošalješ
-                String injectionScript = 
-                    "if (!window.__fetchPatched) {" +
-                    "    window.__fetchPatched = true;" +
-                    "    const originalFetch = window.fetch;" +
-                    "    window.fetch = async function(resource, options = {}) {" +
-                    "        let urlString = typeof resource === 'string' ? resource : (resource && resource.url ? resource.url : '');" +
-                    "        if (urlString && urlString.includes('#ua=')) {" +
-                    "            try {" +
-                    "                const parts = urlString.split('#ua=');" +
-                    "                const cleanUrl = parts[0];" +
-                    "                const customUA = decodeURIComponent(parts[1].split('&')[0]);" +
-                    "                if (window.AndroidBridge && typeof window.AndroidBridge.setUserAgent === 'function') {" +
-                    "                    window.AndroidBridge.setUserAgent(customUA);" +
-                    "                }" +
-                    "                resource = cleanUrl;" +
-                    "                await new Promise(resolve => setTimeout(resolve, 200));" +
-                    "            } catch (e) {}" +
-                    "        }" +
-                    "        return originalFetch(resource, options);" +
-                    "    };" +
-                    "}";
-                
-                view.evaluateJavascript(injectionScript, null);
+                // Ako URL sadrži UA parametar (bilo kroz hash ili query), izvlačimo ga u hodu
+                String targetUA = currentDesktopUA;
+                String cleanUrlStr = urlStr;
+
+                if (urlStr.contains("#ua=")) {
+                    try {
+                        String[] parts = urlStr.split("#ua=");
+                        cleanUrlStr = parts[0];
+                        targetUA = URLDecoder.decode(parts[1].split("&")[0], "UTF-8");
+                        // Automatski ažuriramo globalni UA
+                        currentDesktopUA = targetUA;
+                    } catch (Exception ignored) {}
+                }
+
+                if (cleanUrlStr.contains("youtube.com/results")) {
+                    try {
+                        URL url = new URL(cleanUrlStr);
+                        HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+                        connection.setRequestMethod("GET");
+                        connection.setRequestProperty("User-Agent", targetUA);
+                        connection.setRequestProperty("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
+                        connection.setRequestProperty("Accept-Language", "en-US,en;q=0.9");
+                        connection.setConnectTimeout(10000);
+                        connection.setReadTimeout(10000);
+
+                        InputStream inputStream = connection.getInputStream();
+                        String mimeType = connection.getContentType();
+                        if (mimeType == null) mimeType = "text/html; charset=UTF-8";
+                        
+                        String encoding = "UTF-8";
+                        if (mimeType.contains("charset=")) {
+                            try {
+                                encoding = mimeType.split("charset=")[1].split(";")[0].trim();
+                            } catch (Exception ignored) {}
+                        }
+
+                        return new WebResourceResponse(mimeType.split(";")[0].trim(), encoding, inputStream);
+                    } catch (Exception e) {}
+                }
+                return super.shouldInterceptRequest(view, request);
             }
         });
 
