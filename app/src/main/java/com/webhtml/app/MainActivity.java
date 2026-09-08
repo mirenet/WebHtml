@@ -62,25 +62,27 @@ public class MainActivity extends AppCompatActivity {
                 
                 // Automatsko ubacivanje fetch interceptora koji hvata #ua= parametar
                 String injectionScript = 
-                    "if (!window.__fetchPatched) {" +
-                    "   window.__fetchPatched = true;" +
-                    "   const originalFetch = window.fetch;" +
-                    "   window.fetch = async function(resource, options = {}) {" +
-                    "       let urlString = typeof resource === 'string' ? resource : (resource && resource.url ? resource.url : '');" +
-                    "       if (urlString && urlString.includes('#ua=')) {" +
-                    "           try {" +
-                    "               const parts = urlString.split('#ua=');" +
-                    "               const cleanUrl = parts[0];" +
-                    "               const customUA = decodeURIComponent(parts[1].split('&')[0]);" +
-                    "               if (window.AndroidBridge && typeof window.AndroidBridge.setUserAgent === 'function') {" +
-                    "                   window.AndroidBridge.setUserAgent(customUA);" +
-                    "               }" +
-                    "               resource = cleanUrl;" +
-                    "           } catch (e) {}" +
-                    "       }" +
-                    "       return originalFetch(resource, options);" +
-                    "   };" +
-                    "}";
+    "if (!window.__fetchPatched) {" +
+    "    window.__fetchPatched = true;" +
+    "    const originalFetch = window.fetch;" +
+    "    window.fetch = async function(resource, options = {}) {" +
+    "        let urlString = typeof resource === 'string' ? resource : (resource && resource.url ? resource.url : '');" +
+    "        if (urlString && urlString.includes('#ua=')) {" +
+    "            try {" +
+    "                const parts = urlString.split('#ua=');" +
+    "                const cleanUrl = parts[0];" +
+    "                const customUA = decodeURIComponent(parts[1].split('&')[0]);" +
+    "                if (window.AndroidBridge && typeof window.AndroidBridge.setUserAgent === 'function') {" +
+    "                    window.AndroidBridge.setUserAgent(customUA);" +
+    "                }" +
+    "                resource = cleanUrl;" +
+    "                // KLJUČNO: Pauza dozvoljava WebView-u da primeni novi UA pre nego što fetch pošalje paket" +
+    "                await new Promise(resolve => setTimeout(resolve, 500));" +
+    "            } catch (e) {}" +
+    "        }" +
+    "        return originalFetch(resource, options);" +
+    "    };" +
+    "}";
                 
                 view.evaluateJavascript(injectionScript, null);
             }
